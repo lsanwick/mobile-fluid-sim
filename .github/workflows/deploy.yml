@@ -28,9 +28,6 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      - name: Configure pnpm
-        run: pnpm config set only-built-dependencies '["@tailwindcss/oxide", "esbuild"]'
-
       - name: Install dependencies
         run: pnpm install
 
