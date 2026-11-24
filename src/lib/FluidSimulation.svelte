@@ -142,7 +142,7 @@
 			if (adding) {
 				fluid.addParticlesAt(simPos.x, simPos.y, TAP_RADIUS * 0.5);
 			} else {
-				fluid.removeParticlesNear(simPos.x, simPos.y, TAP_RADIUS * 0.5);
+				fluid.removeParticlesNear(simPos.x, simPos.y, TAP_RADIUS * 0.7);
 			}
 			startHoldAction(adding);
 		}, HOLD_THRESHOLD);
