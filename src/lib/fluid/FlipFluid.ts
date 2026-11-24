@@ -612,7 +612,7 @@ export class FlipFluid {
         for (let gi = gridCenterX - gridRadiusX; gi <= gridCenterX + gridRadiusX; gi++) {
             for (let gj = gridCenterY - gridRadiusY; gj <= gridCenterY + gridRadiusY; gj++) {
                 if (this.numParticles >= this.maxParticles) break;
-                const px = gi * dx + (gj % 2 === 0 ? 0.0 : r);
+                const px = gi * dx;
                 const py = gj * dy;
                 if (px < boundsMinX || px > boundsMaxX || py < boundsMinY || py > boundsMaxY) continue;
                 const distX = px - x;

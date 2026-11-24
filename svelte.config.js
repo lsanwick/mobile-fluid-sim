@@ -9,7 +9,7 @@ const config = {
 	kit: {
 		adapter: adapter(),
 		// GitHub Pages project site prefix
-		basePath: '/mobile-fluid-sim'
+		baseURL: '/mobile-fluid-sim'
 	}
 };
 

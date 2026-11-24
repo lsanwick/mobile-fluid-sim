@@ -65,11 +65,11 @@ export function setupFluidScene(
         foamReturnRate
     );
 
-    // Create particles centered on the screen
+    // Create particles centered on the screen using a regular grid
     fluid.numParticles = numX * numY;
 
-    // Calculate total dimensions of the particle block (including stagger offset)
-    const totalParticleWidth = (numX - 1) * dx + r;
+    // Use a regular grid (no stagger) for symmetric distribution
+    const totalParticleWidth = (numX - 1) * dx;
     const totalParticleHeight = (numY - 1) * dy;
 
     // Calculate starting position to center the particles
@@ -79,7 +79,7 @@ export function setupFluidScene(
     let p = 0;
     for (let i = 0; i < numX; i++) {
         for (let j = 0; j < numY; j++) {
-            fluid.particlePos[p++] = startX + dx * i + (j % 2 === 0 ? 0.0 : r);
+            fluid.particlePos[p++] = startX + dx * i;
             fluid.particlePos[p++] = startY + dy * j;
         }
     }
