@@ -1,1 +1,12 @@
 @import 'tailwindcss';
+
+/*
+ * Safari on iOS 26+ ignores <meta name="theme-color"> and tints its top bar and
+ * overscroll area from the page background, so give html/body the same color as
+ * the top of the app's gradient instead of the default white.
+ */
+html,
+body {
+	background-color: var(--color-gray-900);
+	color-scheme: dark;
+}
