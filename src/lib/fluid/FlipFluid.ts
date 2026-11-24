@@ -408,12 +408,23 @@ export class FlipFluid {
 
                 for (let i = 0; i < this.fNumX; i++) {
                     for (let j = 0; j < this.fNumY; j++) {
-                        const solid = this.cellType[i * n + j] === SOLID_CELL;
-                        if (solid || (i > 0 && this.cellType[(i - 1) * n + j] === SOLID_CELL)) {
-                            this.u[i * n + j] = this.prevU[i * n + j];
+                        const cell = i * n + j;
+                        const solid = this.cellType[cell] === SOLID_CELL;
+                        // Explicitly zero u at left boundary (no penetration)
+                        if (i === 0 || (solid && i > 0 && this.cellType[(i - 1) * n + j] === SOLID_CELL)) {
+                            this.u[cell] = 0.0;
                         }
-                        if (solid || (j > 0 && this.cellType[i * n + j - 1] === SOLID_CELL)) {
-                            this.v[i * n + j] = this.prevV[i * n + j];
+                        // Explicitly zero u at right boundary (no penetration)
+                        if (i === this.fNumX - 1 || (solid && i < this.fNumX - 1 && this.cellType[(i + 1) * n + j] === SOLID_CELL)) {
+                            this.u[cell] = 0.0;
+                        }
+                        // Explicitly zero v at top boundary (no penetration)
+                        if (j === 0 || (solid && j > 0 && this.cellType[i * n + j - 1] === SOLID_CELL)) {
+                            this.v[cell] = 0.0;
+                        }
+                        // Explicitly zero v at bottom boundary (no penetration)
+                        if (j === this.fNumY - 1 || (solid && j < this.fNumY - 1 && this.cellType[i * n + j + 1] === SOLID_CELL)) {
+                            this.v[cell] = 0.0;
                         }
                     }
                 }

@@ -29,7 +29,7 @@
 	/>
 	<meta property="og:type" content="website" />
 	<meta property="og:url" content="https://fluid.sh4jid.me" />
-	<meta property="og:image" content="/mobile-fluid-sim.png" />
+	<meta property="og:image" content="mobile-fluid-sim.png" />
 </svelte:head>
 
 {@render children?.()}
