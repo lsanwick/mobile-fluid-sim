@@ -13,7 +13,13 @@
 
 	const MAX_GRAVITY = 9.81;
 
-	type AppState = 'loading' | 'needs-permission' | 'ready' | 'denied' | 'not-supported';
+	type AppState =
+		| 'loading'
+		| 'needs-permission'
+		| 'ready'
+		| 'denied'
+		| 'no-motion'
+		| 'not-supported';
 
 	const fluidTypes = [
 		{
@@ -98,16 +104,18 @@
 		) {
 			// iOS 13+ permission request
 			try {
-				const orientationResponse = await (DeviceOrientationEvent as any).requestPermission();
-				let motionResponse = 'granted';
-
-				// Also request motion permission if available
-				if (
+				// Start both requests synchronously within the tap: awaiting the first
+				// can consume the user activation and make iOS reject the second.
+				const orientationPromise = (DeviceOrientationEvent as any).requestPermission();
+				const motionPromise =
 					'DeviceMotionEvent' in window &&
 					typeof (DeviceMotionEvent as any).requestPermission === 'function'
-				) {
-					motionResponse = await (DeviceMotionEvent as any).requestPermission();
-				}
+						? (DeviceMotionEvent as any).requestPermission()
+						: Promise.resolve('granted');
+				const [orientationResponse, motionResponse] = await Promise.all([
+					orientationPromise,
+					motionPromise
+				]);
 
 				if (orientationResponse === 'granted' && motionResponse === 'granted') {
 					startListening();
@@ -189,7 +197,13 @@
 			return;
 		}
 
-		// Skip permission for testing
+		// iOS 13+ only delivers motion events after requestPermission() is called
+		// from a user gesture, so show the "Enable Motion Sensors" button there.
+		if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+			appState = 'needs-permission';
+			return;
+		}
+
 		appState = 'ready';
 		startListening();
 	});
@@ -254,6 +268,12 @@
 				class="mt-4 rounded-lg bg-gray-600 px-6 py-2 text-white transition-colors hover:bg-gray-500"
 			>
 				Try Again
+			</button>
+			<button
+				onclick={() => (appState = 'no-motion')}
+				class="mt-4 ml-2 rounded-lg bg-blue-500 px-6 py-2 font-semibold text-white transition-colors hover:bg-blue-600"
+			>
+				Continue Without Tilt
 			</button>
 		</div>
 	{:else}
