@@ -77,9 +77,9 @@ export class FluidRenderer {
     // Cached WebGL locations — computed once at construction to avoid per-frame overhead
     private pointPosLoc: number = -1;
     private pointColorLoc: number = -1;
-    private pointDomainSizeLoc: number = -1;
-    private pointPointSizeLoc: number = -1;
-    private pointDrawDiskLoc: number = -1;
+    private pointDomainSizeLoc: WebGLUniformLocation | null = null;
+    private pointPointSizeLoc: WebGLUniformLocation | null = null;
+    private pointDrawDiskLoc: WebGLUniformLocation | null = null;
 
     constructor(canvas: HTMLCanvasElement) {
         const gl = canvas.getContext('webgl');
