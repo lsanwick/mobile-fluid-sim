@@ -49,7 +49,7 @@ export function setupFluidScene(
 
     const numX = Math.floor((relWaterWidth * tankWidth - 2.0 * h - 2.0 * r) / dx);
     const numY = Math.floor((relWaterHeight * tankHeight - 2.0 * h - 2.0 * r) / dy);
-    const maxParticles = numX * numY;
+    const maxParticles = Math.ceil(numX * numY * 1.5);
 
     // Create fluid
     const fluid = new FlipFluid(
@@ -68,8 +68,8 @@ export function setupFluidScene(
     // Create particles centered on the screen
     fluid.numParticles = numX * numY;
 
-    // Calculate total dimensions of the particle block
-    const totalParticleWidth = (numX - 1) * dx;
+    // Calculate total dimensions of the particle block (including stagger offset)
+    const totalParticleWidth = (numX - 1) * dx + r;
     const totalParticleHeight = (numY - 1) * dy;
 
     // Calculate starting position to center the particles

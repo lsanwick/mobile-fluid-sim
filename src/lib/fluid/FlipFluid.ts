@@ -36,6 +36,7 @@ export class FlipFluid {
     particleVel: Float32Array;
     particleDensity: Float32Array;
     particleRestDensity: number;
+    _storedRestDensity: number;
     numParticles: number;
 
     // Colors
@@ -108,6 +109,7 @@ export class FlipFluid {
         this.particleVel = new Float32Array(2 * this.maxParticles);
         this.particleDensity = new Float32Array(this.fNumCells);
         this.particleRestDensity = 0.0;
+        this._storedRestDensity = 0.0;
 
         // Initialize particle grid
         this.particleRadius = particleRadius;
@@ -306,6 +308,7 @@ export class FlipFluid {
             }
             if (numFluidCells > 0) {
                 this.particleRestDensity = sum / numFluidCells;
+                this._storedRestDensity = this.particleRestDensity;
             }
         }
     }
@@ -588,5 +591,134 @@ export class FlipFluid {
 
     setFoamReturnRate(rate: number): void {
         this.foamReturnRate = Math.max(0, rate);
+    }
+
+    addParticlesAt(x: number, y: number, radius: number): void {
+        const h = this.h;
+        const r = this.particleRadius;
+        const dx = 2.0 * r;
+        const dy = Math.sqrt(3.0) / 2.0 * dx;
+        const boundsMinX = h + r;
+        const boundsMaxX = (this.fNumX - 1) * h - r;
+        const boundsMinY = h + r;
+        const boundsMaxY = (this.fNumY - 1) * h - r;
+
+        const gridCenterX = Math.floor(x / dx);
+        const gridCenterY = Math.floor(y / dy);
+        const gridRadiusX = Math.ceil(radius / dx) + 1;
+        const gridRadiusY = Math.ceil(radius / dy) + 1;
+
+        let added = 0;
+        for (let gi = gridCenterX - gridRadiusX; gi <= gridCenterX + gridRadiusX; gi++) {
+            for (let gj = gridCenterY - gridRadiusY; gj <= gridCenterY + gridRadiusY; gj++) {
+                if (this.numParticles >= this.maxParticles) break;
+                const px = gi * dx + (gj % 2 === 0 ? 0.0 : r);
+                const py = gj * dy;
+                if (px < boundsMinX || px > boundsMaxX || py < boundsMinY || py > boundsMaxY) continue;
+                const distX = px - x;
+                const distY = py - y;
+                if (distX * distX + distY * distY > radius * radius) continue;
+
+                const idx = this.numParticles;
+                this.particlePos[2 * idx] = px;
+                this.particlePos[2 * idx + 1] = py;
+                this.particleVel[2 * idx] = 0.0;
+                this.particleVel[2 * idx + 1] = -0.5;
+                this.numParticles++;
+                added++;
+            }
+        }
+    }
+
+    addParticlesAtSmooth(x: number, y: number, radius: number, count: number): void {
+        const h = this.h;
+        const r = this.particleRadius;
+        const boundsMinX = h + r;
+        const boundsMaxX = (this.fNumX - 1) * h - r;
+        const boundsMinY = h + r;
+        const boundsMaxY = (this.fNumY - 1) * h - r;
+        const radiusSq = radius * radius;
+
+        for (let i = 0; i < count && this.numParticles < this.maxParticles; i++) {
+            // Random point in circle using rejection sampling
+            let px: number, py: number;
+            do {
+                const angle = Math.random() * Math.PI * 2;
+                const dist = Math.random() * radius;
+                px = x + Math.cos(angle) * dist;
+                py = y + Math.sin(angle) * dist;
+            } while (px < boundsMinX || px > boundsMaxX || py < boundsMinY || py > boundsMaxY);
+
+            const idx = this.numParticles;
+            this.particlePos[2 * idx] = px;
+            this.particlePos[2 * idx + 1] = py;
+            this.particleVel[2 * idx] = 0.0;
+            this.particleVel[2 * idx + 1] = -0.5;
+            this.numParticles++;
+        }
+    }
+
+    removeParticlesNear(x: number, y: number, radius: number): number {
+        const h = this.h;
+        const r = this.particleRadius;
+        const boundsMinX = h + r;
+        const boundsMaxX = (this.fNumX - 1) * h - r;
+        const boundsMinY = h + r;
+        const boundsMaxY = (this.fNumY - 1) * h - r;
+        const radiusSq = radius * radius;
+
+        const removeMask = new Uint8Array(this.numParticles);
+        let removedCount = 0;
+
+        for (let i = 0; i < this.numParticles; i++) {
+            const px = this.particlePos[2 * i];
+            const py = this.particlePos[2 * i + 1];
+            const dx = px - x;
+            const dy = py - y;
+            if (dx * dx + dy * dy <= radiusSq) {
+                removeMask[i] = 1;
+                removedCount++;
+            }
+        }
+
+        if (removedCount === 0) return 0;
+
+        let writeIdx = 0;
+        for (let i = 0; i < this.numParticles; i++) {
+            if (removeMask[i] === 0) {
+                if (writeIdx !== i) {
+                    this.particlePos[2 * writeIdx] = this.particlePos[2 * i];
+                    this.particlePos[2 * writeIdx + 1] = this.particlePos[2 * i + 1];
+                    this.particleVel[2 * writeIdx] = this.particleVel[2 * i];
+                    this.particleVel[2 * writeIdx + 1] = this.particleVel[2 * i + 1];
+                    this.particleColor[3 * writeIdx] = this.particleColor[3 * i];
+                    this.particleColor[3 * writeIdx + 1] = this.particleColor[3 * i + 1];
+                    this.particleColor[3 * writeIdx + 2] = this.particleColor[3 * i + 2];
+                }
+                writeIdx++;
+            }
+        }
+
+        this.numParticles = writeIdx;
+        this.particleRestDensity = this._storedRestDensity;
+        return removedCount;
+    }
+
+    hasParticlesNear(x: number, y: number, radius: number): boolean {
+        const radiusSq = radius * radius;
+        for (let i = 0; i < this.numParticles; i++) {
+            const px = this.particlePos[2 * i];
+            const py = this.particlePos[2 * i + 1];
+            const dx = px - x;
+            const dy = py - y;
+            if (dx * dx + dy * dy <= radiusSq) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    getParticleCount(): number {
+        return this.numParticles;
     }
 }

@@ -189,12 +189,9 @@
 			return;
 		}
 
-		if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
-			appState = 'needs-permission';
-		} else {
-			startListening();
-			appState = 'ready';
-		}
+		// Skip permission for testing
+		appState = 'ready';
+		startListening();
 	});
 
 	onDestroy(() => {

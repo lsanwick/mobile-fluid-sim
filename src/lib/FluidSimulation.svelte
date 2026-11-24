@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 
 	import { setupFluidScene, FluidRenderer } from '$lib/fluid';
 	import type { FlipFluid } from '$lib/fluid';
@@ -46,6 +46,15 @@
 	const relWaterWidth = 0.6; // Water width as fraction of tank (0.1 to 1.0)
 	const relWaterHeight = 0.8; // Water height as fraction of tank (0.1 to 1.0)
 
+	// Interaction state
+	let holdTimer: ReturnType<typeof setTimeout> | null = null;
+	let holdInterval: ReturnType<typeof setInterval> | null = null;
+	let isHolding = false;
+	let holdPosition = { x: 0, y: 0 };
+
+	const TAP_RADIUS = 0.15;
+	const HOLD_THRESHOLD = 300;
+
 	function resizeCanvas() {
 		if (!canvas) return;
 
@@ -79,6 +88,84 @@
 			separateParticles,
 			damping
 		);
+	}
+
+	function screenToSim(screenX: number, screenY: number): { x: number; y: number } {
+		if (!canvas) return { x: 0, y: 0 };
+		const rect = canvas.getBoundingClientRect();
+		const scaleX = simWidth / rect.width;
+		const scaleY = simHeight / rect.height;
+		const result = {
+			x: (screenX - rect.left) * scaleX,
+			y: simHeight - (screenY - rect.top) * scaleY
+		};
+		console.log('[FluidSim] screenToSim:', { screenX, screenY, rectLeft: rect.left, rectTop: rect.top, rectWidth: rect.width, rectHeight: rect.height, result });
+		return result;
+	}
+
+	function startHoldAction(add: boolean) {
+		if (!fluid) return;
+		console.log('[FluidSim] startHoldAction add:', add, 'at:', holdPosition);
+		holdInterval = setInterval(() => {
+			if (!fluid) return;
+			if (add) {
+				console.log('[FluidSim] hold interval add at:', holdPosition);
+				fluid.addParticlesAt(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
+			} else {
+				console.log('[FluidSim] hold interval remove at:', holdPosition);
+				fluid.removeParticlesNear(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
+			}
+		}, 30);
+	}
+
+	function stopHoldAction() {
+		console.log('[FluidSim] stopHoldAction');
+		if (holdInterval) {
+			clearInterval(holdInterval);
+			holdInterval = null;
+		}
+	}
+
+	function handlePointerDown(e: PointerEvent) {
+		if (!fluid) return;
+		e.preventDefault();
+		isHolding = false;
+
+		const simPos = screenToSim(e.clientX, e.clientY);
+		holdPosition = { x: simPos.x, y: simPos.y };
+
+		const hasFluid = fluid.hasParticlesNear(simPos.x, simPos.y, TAP_RADIUS);
+		const adding = !hasFluid;
+
+		holdTimer = setTimeout(() => {
+			isHolding = true;
+			if (adding) {
+				fluid.addParticlesAt(simPos.x, simPos.y, TAP_RADIUS * 0.5);
+			} else {
+				fluid.removeParticlesNear(simPos.x, simPos.y, TAP_RADIUS * 0.5);
+			}
+			startHoldAction(adding);
+		}, HOLD_THRESHOLD);
+	}
+
+	function handlePointerMove(e: PointerEvent) {
+		if (!fluid) return;
+		const simPos = screenToSim(e.clientX, e.clientY);
+		holdPosition = simPos;
+	}
+
+	function handlePointerUp(e: PointerEvent) {
+		if (!fluid) return;
+		e.preventDefault();
+
+		stopHoldAction();
+
+		if (holdTimer) {
+			clearTimeout(holdTimer);
+			holdTimer = null;
+		}
+
+		isHolding = false;
 	}
 
 	function render() {
@@ -129,6 +216,12 @@
 		};
 		window.addEventListener('resize', handleResize);
 
+		// Touch/click interaction handlers
+		document.addEventListener('pointerdown', handlePointerDown, { passive: false });
+		document.addEventListener('pointermove', handlePointerMove);
+		document.addEventListener('pointerup', handlePointerUp, { passive: false });
+		document.addEventListener('pointercancel', handlePointerUp, { passive: false });
+
 		// Start animation loop
 		update();
 
@@ -137,6 +230,14 @@
 			if (animationId) {
 				cancelAnimationFrame(animationId);
 			}
+			stopHoldAction();
+			if (holdTimer) {
+				clearTimeout(holdTimer);
+			}
+			document.removeEventListener('pointerdown', handlePointerDown);
+			document.removeEventListener('pointermove', handlePointerMove);
+			document.removeEventListener('pointerup', handlePointerUp);
+			document.removeEventListener('pointercancel', handlePointerUp);
 		};
 	});
 
@@ -169,4 +270,4 @@
 	});
 </script>
 
-<canvas bind:this={canvas} class="absolute inset-0 z-10 h-full w-full"></canvas>
+<canvas bind:this={canvas} class="absolute inset-0 z-10 h-full w-full" style="touch-action: none;"></canvas>
