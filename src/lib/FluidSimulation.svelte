@@ -17,8 +17,7 @@
 		foamColor = { r: 0.75, g: 0.9, b: 1.0 },
 		colorDiffusionCoeff = 0.0008,
 		foamReturnRate = 0.5,
-		onclick,
-		useWebGPU: propUseWebGPU = true
+		onclick
 	}: {
 		gravity?: { x: number; y: number };
 		resolution?: number;
@@ -28,7 +27,6 @@
 		colorDiffusionCoeff?: number;
 		foamReturnRate?: number;
 		onclick?: () => void;
-		useWebGPU?: boolean;
 	} = $props();
 
 	let canvas: HTMLCanvasElement;
@@ -79,51 +77,40 @@
 	const TAP_RADIUS = 0.15;
 	const HOLD_THRESHOLD = 300;
 
-	// WebGPU toggle state
-	let webgpuEnabled = $state(propUseWebGPU);
-	let webgpuSupported = $state(false);
+	// WebGPU availability check
 	let webgpuAvailable = $state(false);
 
-	// Check WebGPU support
 	$effect(() => {
 		if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
 			webgpuAvailable = true;
 		}
 	});
 
-	// Sync internal state with prop
-	$effect(() => {
-		webgpuEnabled = propUseWebGPU;
-	});
-
 	async function initWebGPU() {
-		if (!canvas || !webgpuAvailable) return;
+		if (!canvas || !webgpuAvailable) return false;
 
 		try {
 			const adapter = await navigator.gpu.requestAdapter();
 			if (!adapter) {
 				console.warn('WebGPU: No adapter found');
-				webgpuSupported = false;
-				return;
+				return false;
 			}
 
 			gpuDevice = await adapter.requestDevice();
 			if (!gpuDevice) {
 				console.warn('WebGPU: Failed to request device');
-				webgpuSupported = false;
-				return;
+				return false;
 			}
 
 			gpuRenderer = new FluidRendererWebGPU(canvas, gpuDevice);
 			gpuSimulation = new WebGPUSimulation(gpuDevice);
 
 			gpuInitialized = true;
-			webgpuSupported = true;
 			console.log('WebGPU pipeline initialized');
+			return true;
 		} catch (err) {
 			console.warn('WebGPU initialization failed, falling back to WebGL:', err);
-			webgpuSupported = false;
-			gpuInitialized = false;
+			return false;
 		}
 	}
 
@@ -219,9 +206,6 @@
 	}
 
 	function handlePointerDown(e: PointerEvent) {
-		// Don't interfere with the toggle checkbox
-		if ((e.target as HTMLElement).closest('.gpu-toggle')) return;
-
 		if (!fluid) return;
 		e.preventDefault();
 		isHolding = false;
@@ -317,7 +301,7 @@
 			}
 		}
 
-		if (webgpuEnabled && gpuInitialized) {
+		if (gpuInitialized) {
 			simulateGPU();
 			renderGPU();
 		} else {
@@ -343,16 +327,11 @@
 			foamReturnRate
 		);
 
-		// Initialize renderers
-		initWebGL();
-
-		// Initialize WebGPU if requested
-		if (webgpuEnabled) {
-			await initWebGPU();
-			if (!gpuInitialized) {
-				// Fallback to WebGL if WebGPU failed
-				webgpuEnabled = false;
-			}
+		// Try WebGPU first, fall back to WebGL
+		const success = await initWebGPU();
+		if (!success) {
+			initWebGL();
+			console.log('Running with WebGL fallback');
 		}
 
 		// Initial color is already set via constructor, keep setter for consistency
@@ -438,92 +417,16 @@
 		}
 	});
 
-	function toggleWebGPU() {
-		if (!webgpuAvailable) return;
 
-		if (webgpuEnabled) {
-			// Switching from WebGPU to WebGL
-			if (gpuRenderer) {
-				gpuRenderer.destroy();
-				gpuRenderer = null;
-			}
-			if (gpuSimulation) {
-				gpuSimulation.destroy();
-				gpuSimulation = null;
-			}
-			if (gpuDevice) {
-				gpuDevice.destroy();
-				gpuDevice = null;
-			}
-			gpuInitialized = false;
-			webgpuEnabled = false;
-			console.log('Switched to WebGL pipeline');
-		} else {
-			// Switching from WebGL to WebGPU
-			if (webgpuSupported) {
-				initWebGPU();
-				webgpuEnabled = true;
-				console.log('Switched to WebGPU pipeline');
-			} else {
-				console.warn('WebGPU not supported on this device');
-			}
-		}
-	}
 </script>
 
 <div class="relative h-full w-full">
-	<!-- WebGPU Toggle + FPS - Top Left -->
-	{#if webgpuAvailable}
-		<div class="gpu-toggle absolute left-2 top-2 z-30 flex flex-col gap-1">
-			<label
-				class="flex cursor-pointer items-center gap-1.5 rounded-md bg-black/70 px-2.5 py-1.5 text-xs font-medium text-gray-200 backdrop-blur-sm transition-colors hover:bg-black/85"
-				onclick={(e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					toggleWebGPU();
-				}}
-			>
-				<input
-					type="checkbox"
-					checked={webgpuEnabled}
-					class="h-3.5 w-3.5 cursor-pointer rounded border-gray-500 bg-transparent text-blue-500 focus:ring-1 focus:ring-blue-500"
-					onclick={(e) => e.stopPropagation()}
-					onchange={(e) => {
-						e.stopPropagation();
-						e.preventDefault();
-						toggleWebGPU();
-					}}
-					disabled={!webgpuAvailable}
-				/>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					width="14"
-					height="14"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					class="text-blue-400"
-				>
-					<polyline points="16 18 22 12 16 6" />
-					<polyline points="8 6 2 12 8 18" />
-				</svg>
-				<span class="select-none">WebGPU</span>
-			</label>
-			<div class="rounded-md bg-black/70 px-2 py-1 text-xs font-mono font-medium text-green-400 backdrop-blur-sm">
-				{fpsSmooth} FPS
-			</div>
+	<!-- FPS Counter - Top Left -->
+	<div class="pointer-events-none absolute left-2 top-2 z-30">
+		<div class="rounded-md bg-black/70 px-2 py-1 text-xs font-mono font-medium text-green-400 backdrop-blur-sm">
+			{fpsSmooth} FPS
 		</div>
-	{:else}
-		<!-- FPS only (no WebGPU available) -->
-		<div class="pointer-events-none absolute left-2 top-2 z-30">
-			<div class="rounded-md bg-black/70 px-2 py-1 text-xs font-mono font-medium text-green-400 backdrop-blur-sm">
-				{fpsSmooth} FPS
-			</div>
-		</div>
-	{/if}
+	</div>
 
 	<canvas bind:this={canvas} class="absolute inset-0 z-10 h-full w-full" style="touch-action: none;"></canvas>
 </div>
