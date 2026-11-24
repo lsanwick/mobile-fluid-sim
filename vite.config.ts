@@ -6,6 +6,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 
 export default defineConfig({
+	base: '/mobile-fluid-sim/',
 	plugins: [
 		tailwindcss(),
 		sveltekit(),
