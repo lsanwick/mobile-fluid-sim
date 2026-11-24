@@ -18,7 +18,7 @@
 		colorDiffusionCoeff = 0.0008,
 		foamReturnRate = 0.5,
 		onclick,
-		useWebGPU: propUseWebGPU = false
+		useWebGPU: propUseWebGPU = true
 	}: {
 		gravity?: { x: number; y: number };
 		resolution?: number;
