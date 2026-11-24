@@ -281,11 +281,11 @@ export class FlipFluid {
 
             const x0 = Math.floor((x - h2) * h1);
             const tx = ((x - h2) - x0 * h) * h1;
-            const x1 = Math.min(x0 + 1, this.fNumX - 2);
+            const x1 = Math.min(x0 + 1, this.fNumX - 1);
 
             const y0 = Math.floor((y - h2) * h1);
             const ty = ((y - h2) - y0 * h) * h1;
-            const y1 = Math.min(y0 + 1, this.fNumY - 2);
+            const y1 = Math.min(y0 + 1, this.fNumY - 1);
 
             const sx = 1.0 - tx;
             const sy = 1.0 - ty;
@@ -357,11 +357,11 @@ export class FlipFluid {
 
                 const x0 = Math.min(Math.floor((x - dx) * h1), this.fNumX - 2);
                 const tx = ((x - dx) - x0 * h) * h1;
-                const x1 = Math.min(x0 + 1, this.fNumX - 2);
+                const x1 = Math.min(x0 + 1, this.fNumX - 1);
 
                 const y0 = Math.min(Math.floor((y - dy) * h1), this.fNumY - 2);
                 const ty = ((y - dy) - y0 * h) * h1;
-                const y1 = Math.min(y0 + 1, this.fNumY - 2);
+                const y1 = Math.min(y0 + 1, this.fNumY - 1);
 
                 const sx = 1.0 - tx;
                 const sy = 1.0 - ty;
@@ -384,10 +384,17 @@ export class FlipFluid {
                     f[nr3] += pv * d3; d[nr3] += d3;
                 } else {
                     const offset = component === 0 ? n : 1;
-                    const valid0 = this.cellType[nr0] !== AIR_CELL || this.cellType[nr0 - offset] !== AIR_CELL ? 1.0 : 0.0;
-                    const valid1 = this.cellType[nr1] !== AIR_CELL || this.cellType[nr1 - offset] !== AIR_CELL ? 1.0 : 0.0;
-                    const valid2 = this.cellType[nr2] !== AIR_CELL || this.cellType[nr2 - offset] !== AIR_CELL ? 1.0 : 0.0;
-                    const valid3 = this.cellType[nr3] !== AIR_CELL || this.cellType[nr3 - offset] !== AIR_CELL ? 1.0 : 0.0;
+                    // A face sample is valid if it borders a non-air cell, but not if it
+                    // lies inside a wall (both neighbours solid). Those interior-wall
+                    // samples carry no pressure correction, so counting them dilutes the
+                    // FLIP update and makes particles next to a wall sink under gravity.
+                    const ct = this.cellType;
+                    const isValid = (a: number, b: number) =>
+                        (a !== AIR_CELL || b !== AIR_CELL) && !(a === SOLID_CELL && b === SOLID_CELL) ? 1.0 : 0.0;
+                    const valid0 = isValid(ct[nr0], ct[nr0 - offset]);
+                    const valid1 = isValid(ct[nr1], ct[nr1 - offset]);
+                    const valid2 = isValid(ct[nr2], ct[nr2 - offset]);
+                    const valid3 = isValid(ct[nr3], ct[nr3 - offset]);
 
                     const v = this.particleVel[2 * i + component];
                     const totalValid = valid0 * d0 + valid1 * d1 + valid2 * d2 + valid3 * d3;
@@ -406,24 +413,19 @@ export class FlipFluid {
                     if (d[i] > 0.0) f[i] /= d[i];
                 }
 
+                // No-penetration: zero the normal velocity on every face that touches
+                // a solid cell. u[i*n+j] is the face between cells (i-1, j) and (i, j);
+                // v[i*n+j] is the face between cells (i, j-1) and (i, j). Testing both
+                // adjacent cells handles all walls symmetrically (the left wall's face
+                // is u at i=1, not i=0).
                 for (let i = 0; i < this.fNumX; i++) {
                     for (let j = 0; j < this.fNumY; j++) {
                         const cell = i * n + j;
                         const solid = this.cellType[cell] === SOLID_CELL;
-                        // Explicitly zero u at left boundary (no penetration)
-                        if (i === 0 || (solid && i > 0 && this.cellType[(i - 1) * n + j] === SOLID_CELL)) {
+                        if (solid || (i > 0 && this.cellType[(i - 1) * n + j] === SOLID_CELL)) {
                             this.u[cell] = 0.0;
                         }
-                        // Explicitly zero u at right boundary (no penetration)
-                        if (i === this.fNumX - 1 || (solid && i < this.fNumX - 1 && this.cellType[(i + 1) * n + j] === SOLID_CELL)) {
-                            this.u[cell] = 0.0;
-                        }
-                        // Explicitly zero v at top boundary (no penetration)
-                        if (j === 0 || (solid && j > 0 && this.cellType[i * n + j - 1] === SOLID_CELL)) {
-                            this.v[cell] = 0.0;
-                        }
-                        // Explicitly zero v at bottom boundary (no penetration)
-                        if (j === this.fNumY - 1 || (solid && j < this.fNumY - 1 && this.cellType[i * n + j + 1] === SOLID_CELL)) {
+                        if (solid || (j > 0 && this.cellType[i * n + j - 1] === SOLID_CELL)) {
                             this.v[cell] = 0.0;
                         }
                     }
