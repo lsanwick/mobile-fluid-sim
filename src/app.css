@@ -9,4 +9,7 @@ html,
 body {
 	background-color: var(--color-gray-900);
 	color-scheme: dark;
+	-webkit-touch-callout: none;
+	user-select: none;
+	-webkit-user-select: none;
 }
