@@ -55,6 +55,9 @@ export class FlipFluid {
     firstCellParticle: Int32Array;
     cellParticleIds: Int32Array;
 
+    // Reusable buffer for removeParticlesNear to avoid per-call allocation
+    private _removeMask: Uint8Array | null = null;
+
     constructor(
         density: number,
         width: number,
@@ -389,12 +392,11 @@ export class FlipFluid {
                     // samples carry no pressure correction, so counting them dilutes the
                     // FLIP update and makes particles next to a wall sink under gravity.
                     const ct = this.cellType;
-                    const isValid = (a: number, b: number) =>
-                        (a !== AIR_CELL || b !== AIR_CELL) && !(a === SOLID_CELL && b === SOLID_CELL) ? 1.0 : 0.0;
-                    const valid0 = isValid(ct[nr0], ct[nr0 - offset]);
-                    const valid1 = isValid(ct[nr1], ct[nr1 - offset]);
-                    const valid2 = isValid(ct[nr2], ct[nr2 - offset]);
-                    const valid3 = isValid(ct[nr3], ct[nr3 - offset]);
+                    const n0 = nr0 - offset, n1 = nr1 - offset, n2 = nr2 - offset, n3 = nr3 - offset;
+                    const valid0 = (ct[nr0] !== AIR_CELL || ct[n0] !== AIR_CELL) && !(ct[nr0] === SOLID_CELL && ct[n0] === SOLID_CELL) ? 1.0 : 0.0;
+                    const valid1 = (ct[nr1] !== AIR_CELL || ct[n1] !== AIR_CELL) && !(ct[nr1] === SOLID_CELL && ct[n1] === SOLID_CELL) ? 1.0 : 0.0;
+                    const valid2 = (ct[nr2] !== AIR_CELL || ct[n2] !== AIR_CELL) && !(ct[nr2] === SOLID_CELL && ct[n2] === SOLID_CELL) ? 1.0 : 0.0;
+                    const valid3 = (ct[nr3] !== AIR_CELL || ct[n3] !== AIR_CELL) && !(ct[nr3] === SOLID_CELL && ct[n3] === SOLID_CELL) ? 1.0 : 0.0;
 
                     const v = this.particleVel[2 * i + component];
                     const totalValid = valid0 * d0 + valid1 * d1 + valid2 * d2 + valid3 * d3;
@@ -402,8 +404,7 @@ export class FlipFluid {
                     if (totalValid > 0.0) {
                         const picV = (valid0 * d0 * f[nr0] + valid1 * d1 * f[nr1] + valid2 * d2 * f[nr2] + valid3 * d3 * f[nr3]) / totalValid;
                         const corr = (valid0 * d0 * (f[nr0] - prevF[nr0]) + valid1 * d1 * (f[nr1] - prevF[nr1]) + valid2 * d2 * (f[nr2] - prevF[nr2]) + valid3 * d3 * (f[nr3] - prevF[nr3])) / totalValid;
-                        const flipV = v + corr;
-                        this.particleVel[2 * i + component] = (1.0 - flipRatio) * picV + flipRatio * flipV;
+                        this.particleVel[2 * i + component] = (1.0 - flipRatio) * picV + flipRatio * (v + corr);
                     }
                 }
             }
@@ -680,7 +681,13 @@ export class FlipFluid {
         const boundsMaxY = (this.fNumY - 1) * h - r;
         const radiusSq = radius * radius;
 
-        const removeMask = new Uint8Array(this.numParticles);
+        // Reuse a typed array to avoid per-call allocation
+        if (!this._removeMask || this._removeMask.length < this.numParticles) {
+            this._removeMask = new Uint8Array(Math.max(this.numParticles, 1024));
+        }
+        const removeMask = this._removeMask;
+        removeMask.fill(0, 0, this.numParticles);
+
         let removedCount = 0;
 
         for (let i = 0; i < this.numParticles; i++) {

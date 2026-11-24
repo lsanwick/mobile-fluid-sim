@@ -95,31 +95,25 @@
 		const rect = canvas.getBoundingClientRect();
 		const scaleX = simWidth / rect.width;
 		const scaleY = simHeight / rect.height;
-		const result = {
+		return {
 			x: (screenX - rect.left) * scaleX,
 			y: simHeight - (screenY - rect.top) * scaleY
 		};
-		console.log('[FluidSim] screenToSim:', { screenX, screenY, rectLeft: rect.left, rectTop: rect.top, rectWidth: rect.width, rectHeight: rect.height, result });
-		return result;
 	}
 
 	function startHoldAction(add: boolean) {
 		if (!fluid) return;
-		console.log('[FluidSim] startHoldAction add:', add, 'at:', holdPosition);
 		holdInterval = setInterval(() => {
 			if (!fluid) return;
 			if (add) {
-				console.log('[FluidSim] hold interval add at:', holdPosition);
 				fluid.addParticlesAt(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
 			} else {
-				console.log('[FluidSim] hold interval remove at:', holdPosition);
 				fluid.removeParticlesNear(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
 			}
 		}, 30);
 	}
 
 	function stopHoldAction() {
-		console.log('[FluidSim] stopHoldAction');
 		if (holdInterval) {
 			clearInterval(holdInterval);
 			holdInterval = null;
