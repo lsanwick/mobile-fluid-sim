@@ -1,10 +1,34 @@
 <script lang="ts">
 	import '../app.css';
 	import { injectAnalytics } from '@vercel/analytics/sveltekit';
+	import { onMount } from 'svelte';
 
 	injectAnalytics();
 
 	let { children } = $props();
+
+	async function lockLandscape() {
+		if ('orientation' in screen) {
+			try {
+				await (screen.orientation as Orientation).lock('landscape');
+			} catch {
+				// Orientation lock requires user gesture or isn't supported;
+				// the app will still work, just without rotation locking.
+			}
+		}
+	}
+
+	onMount(() => {
+		// Lock to landscape on first user interaction (required by iOS Safari)
+		let locked = false;
+		const handler = () => {
+			if (locked) return;
+			locked = true;
+			lockLandscape();
+		};
+		window.addEventListener('pointerdown', handler);
+		window.addEventListener('touchstart', handler);
+	});
 </script>
 
 <svelte:head>
