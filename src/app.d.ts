@@ -107,6 +107,7 @@ declare global {
 		compute: {
 			module: GPUShaderModule;
 			entryPoint: string;
+			constants?: Record<string, number>;
 		};
 	}
 
@@ -258,7 +259,20 @@ declare global {
 		createBindGroup(descriptor: GPUBindGroupDescriptor): GPUBindGroup;
 		createCommandEncoder(descriptor?: GPUCommandEncoderDescriptor): GPUCommandEncoder;
 		createQuerySet(descriptor: GPUQuerySetDescriptor): GPUQuerySet;
+		pushErrorScope(filter: 'validation' | 'out-of-memory' | 'internal'): void;
+		popErrorScope(): Promise<GPUError | null>;
+		readonly lost: Promise<GPUDeviceLostInfo>;
 		destroy(): void;
+	}
+	interface GPUError {
+		readonly message: string;
+	}
+	interface GPUDeviceLostInfo {
+		readonly reason: 'unknown' | 'destroyed';
+		readonly message: string;
+	}
+	interface GPUUncapturedErrorEvent extends Event {
+		readonly error: GPUError;
 	}
 
 	interface GPUBufferDescriptor {
@@ -270,7 +284,7 @@ declare global {
 
 	interface GPUQueue {
 		submit(commandBuffers: GPUCommandBuffer[]): void;
-		writeBuffer(buffer: GPUBuffer, bufferOffset: number, data: ArrayBufferView, dataOffset?: number, size?: number): void;
+		writeBuffer(buffer: GPUBuffer, bufferOffset: number, data: ArrayBufferView | ArrayBuffer, dataOffset?: number, size?: number): void;
 	}
 
 	interface GPUCommandEncoder {
@@ -283,6 +297,7 @@ declare global {
 			destinationOffset: number,
 			size: number
 		): void;
+		clearBuffer(buffer: GPUBuffer, offset?: number, size?: number): void;
 		end(): GPUCommandBuffer;
 		finish(): GPUCommandBuffer;
 	}
@@ -494,23 +509,23 @@ declare global {
 	interface GPUVertexBufferLayout {
 		arrayStride: number;
 		attributes: GPUVertexAttribute[];
-		mode?: 'vertex' | 'instance';
+		stepMode?: 'vertex' | 'instance';
 	}
 
 	interface GPUVertexAttribute {
 		format:
-			| 'float1'
-			| 'float2'
-			| 'float3'
-			| 'float4'
-			| 'uint1'
-			| 'uint2'
-			| 'uint3'
-			| 'uint4'
-			| 'sint1'
-			| 'sint2'
-			| 'sint3'
-			| 'sint4'
+			| 'float32'
+			| 'float32x2'
+			| 'float32x3'
+			| 'float32x4'
+			| 'uint32'
+			| 'uint32x2'
+			| 'uint32x3'
+			| 'uint32x4'
+			| 'sint32'
+			| 'sint32x2'
+			| 'sint32x3'
+			| 'sint32x4'
 			| 'float16x2'
 			| 'float16x4';
 		offset: number;

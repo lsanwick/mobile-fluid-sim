@@ -8,7 +8,7 @@
 
 	import { browser } from '$app/environment';
 	import FluidSimulation from '$lib/FluidSimulation.svelte';
-	import GitHubLink from '$lib/GitHubLink.svelte';
+	import OverflowMenu from '$lib/OverflowMenu.svelte';
 	import PopupInfo from '$lib/PopupInfo.svelte';
 
 	const MAX_GRAVITY = 9.81;
@@ -75,7 +75,8 @@
 	let currentFluidIndex = $state(0);
 
 	let angle: number | undefined = $state(0);
-	let gravity: { x: number; y: number } = $state({ x: 0, y: -MAX_GRAVITY });
+	let gravity = $state({ x: 0, y: -MAX_GRAVITY });
+	let gravityStrength = $state(MAX_GRAVITY);
 	let fluidColor = new Tween(fluidTypes[0].fluidColor, {
 		duration: 500,
 		easing: cubicOut
@@ -84,8 +85,14 @@
 		duration: 500,
 		easing: cubicOut
 	});
+	let resolution = $state(70);
 	let colorDiffusionCoeff: number = $state(fluidTypes[0].colorDiffusionCoeff);
 	let foamReturnRate: number = $state(fluidTypes[0].foamReturnRate);
+	let damping = $state(1.0);
+	let overRelaxation = $state(1.7);
+	let showParticles = $state(true);
+	let showGrid = $state(false);
+	let particleSize = $state(0.03);
 
 	let appState: AppState = $state('loading');
 
@@ -96,41 +103,65 @@
 	let shakeTimeThreshold = 600;
 
 	const requestPermission = async () => {
-		if (!browser) return;
+		console.log('requestPermission called, browser=', browser);
+		if (!browser) {
+			console.log('returning early: not browser');
+			return;
+		}
+
+		// Debug: show we're entering the function
+		let dbg = document.getElementById('__page-debug');
+		if (!dbg) {
+			dbg = document.createElement('div');
+			dbg.id = '__page-debug';
+			dbg.style.cssText = 'position:fixed;top:40px;left:10px;background:#000;color:#f0f;font:11px monospace;padding:8px;z-index:9999;white-space:pre';
+			document.body.appendChild(dbg);
+		}
+		dbg.textContent = 'requestPermission called\n';
 
 		if (
 			'DeviceOrientationEvent' in window &&
 			typeof (DeviceOrientationEvent as any).requestPermission === 'function'
 		) {
+			dbg.textContent += 'iOS permission path\n';
 			// iOS 13+ permission request
 			try {
 				// Start both requests synchronously within the tap: awaiting the first
 				// can consume the user activation and make iOS reject the second.
+				dbg.textContent += 'requesting orientation permission...\n';
 				const orientationPromise = (DeviceOrientationEvent as any).requestPermission();
+				dbg.textContent += 'orientation promise created, requesting motion permission...\n';
 				const motionPromise =
 					'DeviceMotionEvent' in window &&
 					typeof (DeviceMotionEvent as any).requestPermission === 'function'
 						? (DeviceMotionEvent as any).requestPermission()
 						: Promise.resolve('granted');
+				dbg.textContent += 'motion promise created, waiting...\n';
 				const [orientationResponse, motionResponse] = await Promise.all([
 					orientationPromise,
 					motionPromise
 				]);
+				dbg.textContent += 'orientation=' + orientationResponse + ' motion=' + motionResponse + '\n';
 
 				if (orientationResponse === 'granted' && motionResponse === 'granted') {
+					dbg.textContent += 'GRANTED, setting ready\n';
 					startListening();
 					appState = 'ready';
 				} else {
+					dbg.textContent += 'DENIED\n';
 					appState = 'denied';
 				}
 			} catch (error) {
+				dbg.textContent += 'ERROR: ' + error + '\n';
 				console.error('Error requesting device motion/orientation permission:', error);
 				appState = 'denied';
 			}
 		} else if ('DeviceOrientationEvent' in window) {
+			dbg.textContent += 'non-iOS path\n';
 			startListening();
 			appState = 'ready';
 		} else {
+			dbg.textContent += 'not supported\n';
 			appState = 'not-supported';
 		}
 	};
@@ -182,8 +213,8 @@
 			const gx = sinGamma * cosBeta;
 			const gy = -sinBeta;
 
-			gravity.x = MAX_GRAVITY * Math.max(-1, Math.min(1, gx));
-			gravity.y = MAX_GRAVITY * Math.max(-1, Math.min(1, gy));
+			gravity.x = gravityStrength * Math.max(-1, Math.min(1, gx));
+			gravity.y = gravityStrength * Math.max(-1, Math.min(1, gy));
 		}
 	};
 
@@ -191,7 +222,7 @@
 		if (!browser) return;
 
 		if (!('DeviceOrientationEvent' in window)) {
-			gravity = { x: 0, y: -MAX_GRAVITY };
+			gravity = { x: 0, y: -gravityStrength };
 			angle = 0;
 			appState = 'not-supported';
 			return;
@@ -232,7 +263,20 @@
 <div
 	class="relative flex h-screen flex-col items-center justify-center bg-gradient-to-b from-gray-900 via-gray-800 to-gray-950"
 >
-	<GitHubLink />
+	<OverflowMenu
+		bind:gravity
+		bind:resolution
+		bind:fluidColor
+		bind:foamColor
+		bind:colorDiffusionCoeff
+		bind:foamReturnRate
+		bind:damping
+		bind:overRelaxation
+		bind:showParticles
+		bind:showGrid
+		bind:particleSize
+		bind:gravityStrength
+	/>
 	{#if appState === 'loading'}
 		<div class="text-center">
 			<Loader2 class="mx-auto mb-4 h-12 w-12 animate-spin text-blue-400" />
@@ -248,6 +292,12 @@
 				gestures to change fluid colors! Please grant permission to access motion sensors for the
 				best experience.
 			</p>
+			<button
+				onclick={() => { console.log('test click direct'); appState = 'ready'; }}
+				class="rounded-lg bg-green-600 px-8 py-3 font-semibold text-white shadow-lg transition-colors hover:bg-green-700"
+			>
+				Test: Skip to Ready
+			</button>
 			<button
 				onclick={requestPermission}
 				class="rounded-lg bg-blue-500 px-8 py-3 font-semibold text-white shadow-lg transition-colors hover:bg-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900 focus:outline-none"
@@ -279,10 +329,16 @@
 	{:else}
 		<FluidSimulation
 			{gravity}
+			{resolution}
 			fluidColor={fluidColor.current}
 			foamColor={foamColor.current}
 			{colorDiffusionCoeff}
 			{foamReturnRate}
+			{damping}
+			{overRelaxation}
+			{showParticles}
+			{showGrid}
+			particleSize={particleSize}
 		/>
 
 		{#if appState === 'ready'}

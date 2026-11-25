@@ -17,6 +17,11 @@
 		foamColor = { r: 0.75, g: 0.9, b: 1.0 },
 		colorDiffusionCoeff = 0.0008,
 		foamReturnRate = 0.5,
+		damping = 1.0,
+		overRelaxation = 1.7,
+		showParticles = true,
+		showGrid = false,
+		particleSize = 0.03,
 		onclick
 	}: {
 		gravity?: { x: number; y: number };
@@ -26,6 +31,11 @@
 		foamColor?: { r: number; g: number; b: number };
 		colorDiffusionCoeff?: number;
 		foamReturnRate?: number;
+		damping?: number;
+		overRelaxation?: number;
+		showParticles?: boolean;
+		showGrid?: boolean;
+		particleSize?: number;
 		onclick?: () => void;
 	} = $props();
 
@@ -51,12 +61,8 @@
 	const flipRatio = 0.95;
 	const numPressureIters = 60;
 	const numParticleIters = 3;
-	const overRelaxation = 1.7;
 	const compensateDrift = true;
 	const separateParticles = true;
-	const showParticles = true;
-	const showGrid = false;
-	const damping = 1.0;
 
 	// Particle count controls
 	const relWaterWidth = 0.6;
@@ -97,24 +103,43 @@
 			}
 
 			gpuDevice = await adapter.requestDevice();
-			if (!gpuDevice) {
-				console.warn('WebGPU: Failed to request device');
-				return false;
-			}
+			gpuDevice.lost.then((info) => console.warn('WebGPU device lost:', info.message));
+			gpuDevice.addEventListener('uncapturederror', (e: Event) =>
+				console.error('WebGPU error:', (e as GPUUncapturedErrorEvent).error.message)
+			);
 
+			// Catch shader/pipeline validation failures so we can fall back to WebGL
+			gpuDevice.pushErrorScope('validation');
 			gpuRenderer = new FluidRendererWebGPU(canvas, gpuDevice);
 			gpuSimulation = new WebGPUSimulation(gpuDevice);
+			gpuSimulation.initialize(fluid);
+			const error = await gpuDevice.popErrorScope();
+			if (error) throw new Error(error.message);
 
 			gpuInitialized = true;
 			console.log('WebGPU pipeline initialized');
 			return true;
 		} catch (err) {
 			console.warn('WebGPU initialization failed, falling back to WebGL:', err);
+			gpuRenderer?.destroy();
+			gpuSimulation?.destroy();
+			gpuDevice?.destroy();
+			gpuRenderer = null;
+			gpuSimulation = null;
+			gpuDevice = null;
 			return false;
 		}
 	}
 
 	function initWebGL() {
+		// A canvas that already handed out a 'webgpu' context can't provide 'webgl',
+		// so swap in a fresh one if the WebGPU attempt got that far.
+		if (canvas.getContext('webgl') === null) {
+			const fresh = canvas.cloneNode() as HTMLCanvasElement;
+			canvas.replaceWith(fresh);
+			canvas = fresh;
+			resizeCanvas();
+		}
 		webglRenderer = new FluidRenderer(canvas);
 		gpuInitialized = false;
 	}
@@ -157,6 +182,16 @@
 		);
 	}
 
+	function simulatePush() {
+		if (!fluid) return;
+		fluid.pushAt(holdPosition.x, holdPosition.y, 0.3, 2.0);
+	}
+
+	function simulateGrab() {
+		if (!fluid) return;
+		fluid.grabAt(holdPosition.x, holdPosition.y, 0.2);
+	}
+
 	function simulateGPU() {
 		if (!fluid || !gpuSimulation) return;
 
@@ -171,7 +206,8 @@
 			overRelaxation,
 			compensateDrift,
 			separateParticles,
-			damping
+			damping,
+			showGrid
 		);
 	}
 
@@ -186,14 +222,31 @@
 		};
 	}
 
+	// Particle edits happen on the CPU copy (kept fresh by the GPU readback)
+	// and are then pushed to the GPU when that pipeline is active.
+	function addParticles(x: number, y: number, radius: number) {
+		const before = fluid.numParticles;
+		fluid.addParticlesAt(x, y, radius);
+		if (gpuSimulation && fluid.numParticles !== before) {
+			gpuSimulation.syncParticles(fluid, before);
+		}
+	}
+
+	function removeParticles(x: number, y: number, radius: number) {
+		const removed = fluid.removeParticlesNear(x, y, radius);
+		if (gpuSimulation && removed > 0) {
+			gpuSimulation.syncParticles(fluid, 0);
+		}
+	}
+
 	function startHoldAction(add: boolean) {
 		if (!fluid) return;
 		holdInterval = setInterval(() => {
 			if (!fluid) return;
 			if (add) {
-				fluid.addParticlesAt(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
+				addParticles(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
 			} else {
-				fluid.removeParticlesNear(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
+				removeParticles(holdPosition.x, holdPosition.y, TAP_RADIUS * 0.5);
 			}
 		}, 30);
 	}
@@ -219,9 +272,9 @@
 		holdTimer = setTimeout(() => {
 			isHolding = true;
 			if (adding) {
-				fluid.addParticlesAt(simPos.x, simPos.y, TAP_RADIUS * 0.5);
+				addParticles(simPos.x, simPos.y, TAP_RADIUS * 0.5);
 			} else {
-				fluid.removeParticlesNear(simPos.x, simPos.y, TAP_RADIUS * 0.7);
+				removeParticles(simPos.x, simPos.y, TAP_RADIUS * 0.7);
 			}
 			startHoldAction(adding);
 		}, HOLD_THRESHOLD);
@@ -271,15 +324,15 @@
 		};
 
 		gpuRenderer.setSimulationBuffers({
-			particlePosBuffer: gpuSimulation['particlePosBuffer'],
-			particleColorBuffer: gpuSimulation['particleColorBuffer'],
-			cellColorBuffer: gpuSimulation['cellColorBuffer'],
-			fNumX: gpuSimulation['fNumX'],
-			fNumY: gpuSimulation['fNumY'],
-			fNumCells: gpuSimulation['fNumCells'],
-			h: gpuSimulation['h'],
-			numParticles: gpuSimulation['numParticles'],
-			maxParticles: gpuSimulation['particlePosBuffer'].size / 8
+			particlePosBuffer: gpuSimulation.particlePosBuffer,
+			particleColorBuffer: gpuSimulation.particleColorBuffer,
+			cellColorBuffer: gpuSimulation.gridBuffer,
+			cellColorOffset: gpuSimulation.cellColorOffset,
+			fNumX: gpuSimulation.fNumX,
+			fNumY: gpuSimulation.fNumY,
+			fNumCells: gpuSimulation.fNumCells,
+			h: gpuSimulation.h,
+			numParticles: gpuSimulation.numParticles
 		});
 
 		gpuRenderer.render(fluid, config);
@@ -301,12 +354,16 @@
 			}
 		}
 
-		if (gpuInitialized) {
-			simulateGPU();
-			renderGPU();
-		} else {
-			simulateCPU();
-			renderCPU();
+		try {
+			if (gpuInitialized) {
+				simulateGPU();
+				renderGPU();
+			} else {
+				simulateCPU();
+				renderCPU();
+			}
+		} catch (err) {
+			console.error('update error:', err);
 		}
 		animationId = requestAnimationFrame(update);
 	}
@@ -396,6 +453,7 @@
 	$effect(() => {
 		if (fluid) {
 			fluid.setFluidColor(fluidColor);
+			gpuSimulation?.syncColors(fluid);
 		}
 	});
 

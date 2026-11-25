@@ -8,37 +8,87 @@ export interface RenderConfig {
     simHeight: number;
 }
 
-// Buffers provided by WebGPUSimulation (must have STORAGE | COPY_SRC | VERTEX usage)
+// Buffers provided by WebGPUSimulation (must have VERTEX usage)
 export interface SimulationBuffers {
     particlePosBuffer: GPUBuffer;
     particleColorBuffer: GPUBuffer;
     cellColorBuffer: GPUBuffer;
+    cellColorOffset: number;
     fNumX: number;
     fNumY: number;
     fNumCells: number;
     h: number;
     numParticles: number;
-    maxParticles: number;
 }
+
+// WebGPU has no point sprites (points are always 1px), so every particle /
+// grid cell is drawn as an instanced quad and the disk is cut in the fragment shader.
+const pointShaderWGSL = /* wgsl */ `
+struct Uniforms {
+    domainSize: vec2f,
+    halfSize: f32,
+    drawDisk: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec3f,
+    @location(1) local: vec2f,
+};
+
+const CORNERS = array<vec2f, 6>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+    vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0)
+);
+
+@vertex
+fn vs(
+    @builtin(vertex_index) vi: u32,
+    @location(0) center: vec2f,
+    @location(1) color: vec3f
+) -> VertexOutput {
+    let corner = CORNERS[vi];
+    let p = center + corner * uniforms.halfSize;
+    var out: VertexOutput;
+    out.position = vec4f(p * (2.0 / uniforms.domainSize) - 1.0, 0.0, 1.0);
+    out.color = color;
+    out.local = corner;
+    return out;
+}
+
+@fragment
+fn fs(in: VertexOutput) -> @location(0) vec4f {
+    if (uniforms.drawDisk > 0.5) {
+        // Same falloff as the WebGL shader (gl_PointCoord - 0.5 == local * 0.5)
+        let r2 = 0.25 * dot(in.local, in.local);
+        if (r2 > 0.25) {
+            discard;
+        }
+        let alpha = (1.0 - smoothstep(0.15, 0.25, r2)) * 0.8;
+        return vec4f(in.color * alpha, alpha);
+    }
+    return vec4f(in.color, 1.0);
+}
+`;
 
 export class FluidRendererWebGPU {
     private device: GPUDevice;
     private context: GPUCanvasContext;
     private format: GPUTextureFormat;
-    private swapChain: GPUTextureView;
+    private pipeline: GPURenderPipeline;
 
-    // Pipeline state
-    private pointPipeline!: GPURenderPipeline;
-    private pointPipelineBindGroup!: GPUBindGroup;
-
-    // Vertex buffers (provided by simulation)
     private simBuffers: SimulationBuffers | null = null;
 
-    // Uniform buffer
-    private uniformBuffer: GPUBuffer;
-    private uniformBindGroup: GPUBindGroup;
+    private particleUniforms: GPUBuffer;
+    private particleBindGroup: GPUBindGroup;
+    private gridUniforms: GPUBuffer;
+    private gridBindGroup: GPUBindGroup;
 
-    // Canvas dimensions
+    // Cell centers for grid display (built lazily)
+    private gridCenterBuffer: GPUBuffer | null = null;
+
     private canvasWidth = 0;
     private canvasHeight = 0;
 
@@ -50,135 +100,91 @@ export class FluidRendererWebGPU {
             throw new Error('WebGPU context not supported');
         }
         this.context = context;
+        this.format = navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat;
+        context.configure({ device, format: this.format, alphaMode: 'premultiplied' });
 
-        const format = navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat;
-        this.format = format;
+        const module = device.createShaderModule({ code: pointShaderWGSL });
 
-        context.configure({
-            device,
-            format,
-            alphaMode: 'premultiplied'
-        });
-        this.swapChain = context.getCurrentTexture().createView();
-
-        // Create shaders
-        const pointShaderModule = device.createShaderModule({
-            code: pointVertexShaderWGSL + pointFragmentShaderWGSL
+        const bindGroupLayout = device.createBindGroupLayout({
+            entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }]
         });
 
-        // Create bind group layout for point rendering
-        const pointBindGroupLayout = device.createBindGroupLayout({
-            entries: [
-                {
-                    binding: 0,
-                    visibility: GPUShaderStage.VERTEX,
-                    buffer: { type: 'uniform' }
-                }
-            ]
-        });
-
-        // Create point rendering pipeline
-        this.pointPipeline = device.createRenderPipeline({
-            layout: device.createPipelineLayout({
-                bindGroupLayouts: [pointBindGroupLayout]
-            }),
+        this.pipeline = device.createRenderPipeline({
+            layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
             vertex: {
-                module: pointShaderModule,
-                entryPoint: 'pointVertex',
+                module,
+                entryPoint: 'vs',
                 buffers: [
                     {
                         arrayStride: 2 * 4,
-                        attributes: [
-                            {
-                                shaderLocation: 0,
-                                offset: 0,
-                                format: 'float2'
-                            }
-                        ]
+                        stepMode: 'instance',
+                        attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
                     },
                     {
                         arrayStride: 3 * 4,
-                        attributes: [
-                            {
-                                shaderLocation: 1,
-                                offset: 0,
-                                format: 'float3'
-                            }
-                        ]
+                        stepMode: 'instance',
+                        attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }]
                     }
                 ]
             },
             fragment: {
-                module: pointShaderModule,
-                entryPoint: 'pointFragment',
+                module,
+                entryPoint: 'fs',
                 targets: [
                     {
-                        format,
+                        format: this.format,
+                        // Premultiplied-alpha "over"
                         blend: {
-                            color: {
-                                srcFactor: 'src-alpha',
-                                dstFactor: 'one-minus-src-alpha',
-                                operation: 'add'
-                            },
-                            alpha: {
-                                srcFactor: 'src-alpha',
-                                dstFactor: 'one-minus-src-alpha',
-                                operation: 'add'
-                            }
+                            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
                         }
                     }
                 ]
             },
-            primitive: {
-                topology: 'point-list'
-            }
+            primitive: { topology: 'triangle-list' }
         });
 
-        // Create uniform buffer and bind group
-        this.uniformBuffer = device.createBuffer({
-            size: 4 * 4, // 4 floats
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        const makeUniforms = () =>
+            device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.particleUniforms = makeUniforms();
+        this.gridUniforms = makeUniforms();
+        this.particleBindGroup = device.createBindGroup({
+            layout: bindGroupLayout,
+            entries: [{ binding: 0, resource: { buffer: this.particleUniforms } }]
+        });
+        this.gridBindGroup = device.createBindGroup({
+            layout: bindGroupLayout,
+            entries: [{ binding: 0, resource: { buffer: this.gridUniforms } }]
         });
 
-        this.uniformBindGroup = device.createBindGroup({
-            layout: pointBindGroupLayout,
-            entries: [
-                {
-                    binding: 0,
-                    resource: {
-                        buffer: this.uniformBuffer
-                    }
-                }
-            ]
-        });
+        this.canvasWidth = canvas.width;
+        this.canvasHeight = canvas.height;
     }
 
-    // Set the simulation buffers to render from
     setSimulationBuffers(buffers: SimulationBuffers): void {
         this.simBuffers = buffers;
     }
 
     render(fluid: FlipFluid, config: RenderConfig): void {
+        if (this.canvasWidth === 0 || this.canvasHeight === 0) return;
+
         const encoder = this.device.createCommandEncoder();
         const pass = encoder.beginRenderPass({
             colorAttachments: [
                 {
-                    view: this.swapChain,
-                    clearValue: { r: 0.02, g: 0.1, b: 0.2, a: 1.0 },
+                    // The swap-chain texture changes every frame
+                    view: this.context.getCurrentTexture().createView(),
+                    clearValue: { r: 0, g: 0, b: 0, a: 0 },
                     loadOp: 'clear',
                     storeOp: 'store'
                 }
             ]
         });
 
-        // Render grid cells
-        if (config.showGrid && this.simBuffers) {
-            this.renderGrid(pass, fluid, config);
-        }
-
-        // Render particles
-        if (config.showParticles && this.simBuffers) {
-            this.renderParticles(pass, fluid, config);
+        if (this.simBuffers) {
+            pass.setPipeline(this.pipeline);
+            if (config.showGrid) this.renderGrid(pass, fluid, config);
+            if (config.showParticles) this.renderParticles(pass, fluid, config);
         }
 
         pass.end();
@@ -186,108 +192,60 @@ export class FluidRendererWebGPU {
     }
 
     private renderGrid(pass: GPURenderPassEncoder, fluid: FlipFluid, config: RenderConfig): void {
-        if (!this.simBuffers) return;
+        const sb = this.simBuffers!;
+        if (sb.fNumCells === 0) return;
 
-        const numCells = this.simBuffers.fNumCells;
-        if (numCells === 0) return;
+        if (!this.gridCenterBuffer) {
+            const centers = new Float32Array(2 * sb.fNumCells);
+            let p = 0;
+            for (let i = 0; i < sb.fNumX; i++) {
+                for (let j = 0; j < sb.fNumY; j++) {
+                    centers[p++] = (i + 0.5) * sb.h;
+                    centers[p++] = (j + 0.5) * sb.h;
+                }
+            }
+            this.gridCenterBuffer = this.device.createBuffer({
+                size: centers.byteLength,
+                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+            });
+            this.device.queue.writeBuffer(this.gridCenterBuffer, 0, centers);
+        }
 
-        // Upload color data (grid colors change every frame)
-        this.device.queue.writeBuffer(this.simBuffers.cellColorBuffer, 0, fluid.cellColor);
-
-        // Set uniform: domain size, point size, draw disk (0 = square)
-        const pointSize = 0.9 * fluid.h / config.simWidth * this.canvasWidth;
-        this.uploadUniforms(config.simWidth, config.simHeight, pointSize, 0.0);
-
-        pass.setPipeline(this.pointPipeline);
-        pass.setBindGroup(0, this.uniformBindGroup);
-        pass.setVertexBuffer(0, this.simBuffers.particlePosBuffer);
-        pass.setVertexBuffer(1, this.simBuffers.cellColorBuffer);
-        pass.draw(numCells, 1, 0, 0);
+        this.writeUniforms(this.gridUniforms, config, 0.45 * fluid.h, 0.0);
+        pass.setBindGroup(0, this.gridBindGroup);
+        pass.setVertexBuffer(0, this.gridCenterBuffer);
+        pass.setVertexBuffer(1, sb.cellColorBuffer, sb.cellColorOffset);
+        pass.draw(6, sb.fNumCells, 0, 0);
     }
 
     private renderParticles(pass: GPURenderPassEncoder, fluid: FlipFluid, config: RenderConfig): void {
-        if (!this.simBuffers) return;
+        const sb = this.simBuffers!;
+        if (sb.numParticles === 0) return;
 
-        const numParticles = this.simBuffers.numParticles;
-        if (numParticles === 0) return;
-
-        // Set uniform: domain size, point size, draw disk (1 = disk)
-        const pointSize = 2.0 * fluid.particleRadius / config.simWidth * this.canvasWidth;
-        this.uploadUniforms(config.simWidth, config.simHeight, pointSize, 1.0);
-
-        pass.setPipeline(this.pointPipeline);
-        pass.setBindGroup(0, this.uniformBindGroup);
-        pass.setVertexBuffer(0, this.simBuffers.particlePosBuffer);
-        pass.setVertexBuffer(1, this.simBuffers.particleColorBuffer);
-        pass.draw(numParticles, 1, 0, 0);
+        this.writeUniforms(this.particleUniforms, config, fluid.particleRadius, 1.0);
+        pass.setBindGroup(0, this.particleBindGroup);
+        pass.setVertexBuffer(0, sb.particlePosBuffer);
+        pass.setVertexBuffer(1, sb.particleColorBuffer);
+        pass.draw(6, sb.numParticles, 0, 0);
     }
 
-    private uploadUniforms(domainX: number, domainY: number, pointSize: number, drawDisk: number): void {
-        const uniformData = new Float32Array([domainX, domainY, pointSize, drawDisk]);
-        this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
+    private writeUniforms(buffer: GPUBuffer, config: RenderConfig, halfSize: number, drawDisk: number): void {
+        this.device.queue.writeBuffer(
+            buffer,
+            0,
+            new Float32Array([config.simWidth, config.simHeight, halfSize, drawDisk])
+        );
     }
 
     resize(width: number, height: number): void {
         this.canvasWidth = width;
         this.canvasHeight = height;
-        this.context.configure({
-            device: this.device,
-            format: this.format,
-            alphaMode: 'premultiplied'
-        });
     }
 
     destroy(): void {
-        this.uniformBuffer.destroy();
+        this.particleUniforms.destroy();
+        this.gridUniforms.destroy();
+        this.gridCenterBuffer?.destroy();
         this.context.unconfigure();
     }
 }
-
-// WGSL shaders
-
-const pointVertexShaderWGSL = `
-struct Uniforms {
-    domainSize: vec2f,
-    pointSize: f32,
-    drawDisk: f32,
-};
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-struct PointVertexInput {
-    @location(0) position: vec2f,
-    @location(1) color: vec3f,
-};
-
-struct PointVertexOutput {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec3f,
-    @location(1) drawDisk: f32,
-};
-
-@vertex
-fn pointVertex(input: PointVertexInput) -> PointVertexOutput {
-    var output: PointVertexOutput;
-    let screenTransform = vec2f(2.0 / uniforms.domainSize.x, 2.0 / uniforms.domainSize.y);
-    output.position = vec4f(input.position * screenTransform + vec2f(-1.0, -1.0), 0.0, 1.0);
-    output.position.y *= -1.0;
-    output.color = input.color;
-    output.drawDisk = uniforms.drawDisk;
-    return output;
-}
-`;
-
-const pointFragmentShaderWGSL = `
-@fragment
-fn pointFragment(@location(0) color: vec3f, @location(1) drawDisk: f32) -> @location(0) vec4f {
-    if (drawDisk > 0.5) {
-        let r2 = dot(gl_PointCoord - vec2f(0.5), gl_PointCoord - vec2f(0.5));
-        if (r2 > 0.25) {
-            discard;
-        }
-        let alpha = 1.0 - smoothstep(0.15, 0.25, r2);
-        return vec4f(color, alpha * 0.8);
-    }
-    return vec4f(color, 1.0);
-}
-`;
